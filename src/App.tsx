@@ -7,29 +7,6 @@ import {
   Activity, ChevronRight, Menu, Trash2, Edit, Check, Smartphone, LogOut, AlertCircle, Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  collection, 
-  onSnapshot, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  query, 
-  where,
-  serverTimestamp,
-  getDocs
-} from 'firebase/firestore';
-import { 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  sendPasswordResetEmail, 
-  onAuthStateChanged,
-  signOut,
-  GoogleAuthProvider,
-  signInWithPopup
-} from 'firebase/auth';
-import { db, auth } from './firebase';
-
 // Types
 interface Patient {
   id: string;
@@ -45,7 +22,7 @@ interface Patient {
 
 interface AutomationRule {
   id: string;
-  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao';
+  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao' | 'aniversario' | 'boas_vindas';
   conditionValue?: string;
   daysOffset: number;
   messageTemplate: string;
@@ -91,14 +68,6 @@ class ErrorBoundary extends React.Component<any, any> {
 
   render() {
     if (this.state.hasError) {
-      let errorMessage = "Ocorreu um erro inesperado.";
-      try {
-        const errorInfo = JSON.parse(this.state.error.message);
-        errorMessage = `Erro no Firestore: ${errorInfo.error} (Operação: ${errorInfo.operationType})`;
-      } catch (e) {
-        errorMessage = this.state.error?.message || errorMessage;
-      }
-
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
           <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-red-100 text-center">
@@ -106,7 +75,7 @@ class ErrorBoundary extends React.Component<any, any> {
               <AlertCircle size={32} />
             </div>
             <h2 className="text-xl font-bold text-slate-800 mb-2">Ops! Algo deu errado</h2>
-            <p className="text-slate-500 text-sm mb-6">{errorMessage}</p>
+            <p className="text-slate-500 text-sm mb-6">{this.state.error?.message || "Ocorreu um erro inesperado."}</p>
             <button 
               onClick={() => window.location.reload()} 
               className="w-full bg-slate-800 text-white py-3 rounded-xl font-bold hover:bg-slate-900 transition-all"
@@ -127,39 +96,6 @@ export default function App() {
   const [editingPatient, setEditingPatient] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
-  // --- Error Handling ---
-  enum OperationType {
-    CREATE = 'create',
-    UPDATE = 'update',
-    DELETE = 'delete',
-    LIST = 'list',
-    GET = 'get',
-    WRITE = 'write',
-  }
-
-  const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
-    const errInfo = {
-      error: error instanceof Error ? error.message : String(error),
-      authInfo: {
-        userId: auth.currentUser?.uid,
-        email: auth.currentUser?.email,
-        emailVerified: auth.currentUser?.emailVerified,
-        isAnonymous: auth.currentUser?.isAnonymous,
-        tenantId: auth.currentUser?.tenantId,
-        providerInfo: auth.currentUser?.providerData.map(provider => ({
-          providerId: provider.providerId,
-          displayName: provider.displayName,
-          email: provider.email,
-          photoUrl: provider.photoURL
-        })) || []
-      },
-      operationType,
-      path
-    };
-    console.error('Firestore Error: ', JSON.stringify(errInfo));
-    showToast(`Erro: ${errInfo.error}`);
-    throw new Error(JSON.stringify(errInfo));
-  };
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -184,62 +120,85 @@ export default function App() {
   const [selectedPatientId, setSelectedPatientId] = useState('');
   const [toastMsg, setToastMsg] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [messageDraft, setMessageDraft] = useState('');
   const [configSearchTerm, setConfigSearchTerm] = useState('');
+  const [showBirthdayModal, setShowBirthdayModal] = useState(false);
   const fileInputRef = useRef<any>(null);
 
-  // Firebase Auth Listener
+  // Local Persistence and Auth Simulation
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUser(user);
-        setIsAuthenticated(true);
-      } else {
-        setUser(null);
-        setIsAuthenticated(false);
-      }
-      setIsLoading(false);
-      setIsAuthReady(true);
-    });
-    return () => unsubscribe();
+    const savedUser = localStorage.getItem('topclinic_user');
+    if (savedUser) {
+      const userData = JSON.parse(savedUser);
+      setUser(userData);
+      setIsAuthenticated(true);
+    }
+    
+    // Load initial data
+    const savedPatients = localStorage.getItem('topclinic_patients');
+    if (savedPatients) setPatients(JSON.parse(savedPatients));
+    
+    const savedAppointments = localStorage.getItem('topclinic_appointments');
+    if (savedAppointments) setAppointments(JSON.parse(savedAppointments));
+    
+    const savedFinances = localStorage.getItem('topclinic_finances');
+    if (savedFinances) setFinances(JSON.parse(savedFinances));
+    
+    const savedMessages = localStorage.getItem('topclinic_messages');
+    if (savedMessages) setMessages(JSON.parse(savedMessages));
+    
+    const savedRules = localStorage.getItem('topclinic_rules');
+    if (savedRules) {
+      setAutomationRules(JSON.parse(savedRules));
+    } else {
+      // Default Rules
+      const defaultRules: AutomationRule[] = [
+        {
+          id: 'def-1',
+          type: 'lembrete_consulta',
+          daysOffset: -1,
+          messageTemplate: 'Olá {nome}, confirmamos sua consulta para amanhã. Podemos contar com sua presença? 🏥',
+          createdBy: 'local-user'
+        },
+        {
+          id: 'def-2',
+          type: 'pos_consulta',
+          daysOffset: 1,
+          messageTemplate: 'Olá {nome}, como você está se sentindo após a consulta de ontem? Qualquer dúvida, estamos à disposição! 😊',
+          createdBy: 'local-user'
+        },
+        {
+          id: 'def-3',
+          type: 'aniversario',
+          daysOffset: 0,
+          messageTemplate: 'Parabéns {nome}! 🎂 Desejamos muita saúde, paz e felicidades no seu dia especial. Um grande abraço da equipe TopClinic!',
+          createdBy: 'local-user'
+        },
+        {
+          id: 'def-4',
+          type: 'boas_vindas',
+          daysOffset: 0,
+          messageTemplate: 'Seja muito bem-vindo(a) à TopClinic, {nome}! 🌟 É um prazer ter você conosco. Estamos aqui para cuidar da sua saúde com excelência.',
+          createdBy: 'local-user'
+        }
+      ];
+      setAutomationRules(defaultRules);
+    }
+
+    setIsLoading(false);
+    setIsAuthReady(true);
   }, []);
 
-  // Firebase Firestore Listeners
+  // Save to localStorage when state changes
   useEffect(() => {
-    if (!user) return;
-
-    const qPatients = query(collection(db, 'patients'), where('createdBy', '==', user.uid));
-    const unsubPatients = onSnapshot(qPatients, (snapshot) => {
-      setPatients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Patient)));
-    });
-
-    const qAppointments = query(collection(db, 'appointments'), where('createdBy', '==', user.uid));
-    const unsubAppointments = onSnapshot(qAppointments, (snapshot) => {
-      setAppointments(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Appointment)));
-    });
-
-    const qFinances = query(collection(db, 'finances'), where('createdBy', '==', user.uid));
-    const unsubFinances = onSnapshot(qFinances, (snapshot) => {
-      setFinances(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Finance)));
-    });
-
-    const qMessages = query(collection(db, 'messages'), where('createdBy', '==', user.uid));
-    const unsubMessages = onSnapshot(qMessages, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
-    });
-
-    const qRules = query(collection(db, 'automationRules'), where('createdBy', '==', user.uid));
-    const unsubRules = onSnapshot(qRules, (snapshot) => {
-      setAutomationRules(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AutomationRule)));
-    });
-
-    return () => {
-      unsubPatients();
-      unsubAppointments();
-      unsubFinances();
-      unsubMessages();
-      unsubRules();
-    };
-  }, [user]);
+    if (isAuthReady) {
+      localStorage.setItem('topclinic_patients', JSON.stringify(patients));
+      localStorage.setItem('topclinic_appointments', JSON.stringify(appointments));
+      localStorage.setItem('topclinic_finances', JSON.stringify(finances));
+      localStorage.setItem('topclinic_messages', JSON.stringify(messages));
+      localStorage.setItem('topclinic_rules', JSON.stringify(automationRules));
+    }
+  }, [patients, appointments, finances, messages, automationRules, isAuthReady]);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -248,30 +207,20 @@ export default function App() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    try {
-      await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password);
-      showToast('Bem-vindo ao TopClinic!');
-    } catch (error: any) {
-      console.error('Login error:', error);
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        showToast('E-mail ou senha incorretos.');
-      } else if (error.code === 'auth/configuration-not-found') {
-        showToast('Erro: O login com e-mail/senha não está habilitado no Firebase Console.');
-      } else {
-        showToast('Erro ao acessar: ' + error.message);
-      }
-    }
+    // Simple mock login
+    const mockUser = { uid: 'local-user', email: loginForm.email, displayName: 'Admin' };
+    setUser(mockUser);
+    setIsAuthenticated(true);
+    localStorage.setItem('topclinic_user', JSON.stringify(mockUser));
+    showToast('Bem-vindo ao TopClinic!');
   };
 
   const handleGoogleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      showToast('Bem-vindo ao TopClinic!');
-    } catch (error: any) {
-      console.error('Google Login error:', error);
-      showToast('Erro ao acessar com Google: ' + error.message);
-    }
+    const mockUser = { uid: 'local-user-google', email: 'google@user.com', displayName: 'Google User' };
+    setUser(mockUser);
+    setIsAuthenticated(true);
+    localStorage.setItem('topclinic_user', JSON.stringify(mockUser));
+    showToast('Bem-vindo ao TopClinic!');
   };
 
   const handleRegister = async (e) => {
@@ -280,35 +229,25 @@ export default function App() {
       showToast('As senhas não coincidem.');
       return;
     }
-
-    try {
-      await createUserWithEmailAndPassword(auth, registerForm.email, registerForm.password);
-      showToast('Conta criada com sucesso!');
-      setIsRegistering(false);
-      setLoginForm({ email: registerForm.email, password: '' });
-    } catch (error: any) {
-      showToast('Erro ao criar conta: ' + error.message);
-    }
+    const mockUser = { uid: `local-user-${Date.now()}`, email: registerForm.email, displayName: registerForm.name };
+    setUser(mockUser);
+    setIsAuthenticated(true);
+    localStorage.setItem('topclinic_user', JSON.stringify(mockUser));
+    showToast('Conta criada com sucesso!');
+    setIsRegistering(false);
   };
 
   const handleRecoverPassword = async (e) => {
     e.preventDefault();
-    try {
-      await sendPasswordResetEmail(auth, recoveryEmail);
-      showToast(`Instruções enviadas para ${recoveryEmail}`);
-      setIsRecoveringPassword(false);
-    } catch (error: any) {
-      showToast('Erro: ' + error.message);
-    }
+    showToast(`Instruções simuladas enviadas para ${recoveryEmail}`);
+    setIsRecoveringPassword(false);
   };
 
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      showToast('Até logo!');
-    } catch (error) {
-      showToast('Erro ao sair');
-    }
+    setUser(null);
+    setIsAuthenticated(false);
+    localStorage.removeItem('topclinic_user');
+    showToast('Até logo!');
   };
 
   // --- Funções Auxiliares ---
@@ -323,52 +262,45 @@ export default function App() {
     e.target.value = v;
   };
 
-  const handleStatusChange = async (appointmentId, newStatus) => {
-    try {
-      await updateDoc(doc(db, 'appointments', appointmentId), { status: newStatus });
-      
-      if (newStatus === 'faltou') {
-        const app = appointments.find(a => a.id === appointmentId);
-        if (app) {
-          await addDoc(collection(db, 'messages'), {
+  const handleStatusChange = (appointmentId, newStatus) => {
+    setAppointments(prev => prev.map(app => {
+      if (app.id === appointmentId) {
+        const updatedApp = { ...app, status: newStatus };
+        
+        if (newStatus === 'faltou') {
+          const newMessage: Message = {
+            id: Date.now().toString(),
             patientId: app.patientId,
             text: `Olá ${getPatientName(app.patientId)}, notamos que você não pôde comparecer à consulta. Podemos reagendar?`,
             date: new Date().toISOString().split('T')[0],
             status: 'pendente',
             createdBy: user.uid
-          });
+          };
+          setMessages(m => [...m, newMessage]);
         }
+        return updatedApp;
       }
-      showToast('Status atualizado!');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `appointments/${appointmentId}`);
-    }
+      return app;
+    }));
+    showToast('Status atualizado!');
   };
 
-  const handleDeletePatient = async (id) => {
+  const handleDeletePatient = (id) => {
     if (window.confirm('Deseja realmente excluir este paciente?')) {
-      try {
-        await deleteDoc(doc(db, 'patients', id));
-        showToast('Paciente excluído');
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `patients/${id}`);
-      }
+      setPatients(prev => prev.filter(p => p.id !== id));
+      showToast('Paciente excluído');
     }
   };
 
-  const handleSendMessage = async (messageId) => {
+  const handleSendMessage = (messageId) => {
     const msg = messages.find(m => m.id === messageId);
     if (msg) {
       const phone = getPatientPhone(msg.patientId).replace(/\D/g, '');
       const formattedPhone = phone.startsWith('55') ? phone : `55${phone}`;
       window.open(`https://wa.me/${formattedPhone}?text=${encodeURIComponent(msg.text)}`, '_blank');
       
-      try {
-        await updateDoc(doc(db, 'messages', messageId), { status: 'enviada' });
-        showToast('WhatsApp aberto!');
-      } catch (error) {
-        showToast('Erro ao atualizar status da mensagem');
-      }
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, status: 'enviada' } : m));
+      showToast('WhatsApp aberto!');
     }
   };
 
@@ -383,10 +315,11 @@ export default function App() {
     showToast('Backup exportado!');
   };
 
-  const processAutomations = async () => {
+  const processAutomations = () => {
     let generatedCount = 0;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    const newMessages: Message[] = [];
 
     for (const rule of automationRules) {
       if (rule.type === 'pos_consulta' || rule.type === 'lembrete_consulta') {
@@ -400,23 +333,67 @@ export default function App() {
           const targetDate = new Date(appDate);
           targetDate.setDate(targetDate.getDate() + rule.daysOffset);
 
-          if (today >= targetDate) {
+          if (today.getTime() === targetDate.getTime()) {
             const msgText = rule.messageTemplate.replace('{nome}', getPatientName(app.patientId));
-            const exists = messages.some(m => m.patientId === app.patientId && m.text === msgText);
+            const exists = messages.some(m => m.patientId === app.patientId && m.text === msgText) || 
+                           newMessages.some(m => m.patientId === app.patientId && m.text === msgText);
             
             if (!exists) {
-              try {
-                await addDoc(collection(db, 'messages'), {
-                  patientId: app.patientId,
-                  text: msgText,
-                  date: todayDate,
-                  status: 'pendente',
-                  createdBy: user.uid
-                });
-                generatedCount++;
-              } catch (e) {
-                console.error(e);
-              }
+              newMessages.push({
+                id: `auto-${Date.now()}-${generatedCount}`,
+                patientId: app.patientId,
+                text: msgText,
+                date: todayDate,
+                status: 'pendente',
+                createdBy: user.uid
+              });
+              generatedCount++;
+            }
+          }
+        }
+      } else if (rule.type === 'aniversario') {
+        for (const p of patients) {
+          if (!p.birthDate) continue;
+          const birthDate = new Date(p.birthDate);
+          if (today.getMonth() === birthDate.getMonth() && today.getDate() === birthDate.getDate()) {
+            const msgText = rule.messageTemplate.replace('{nome}', p.name);
+            const exists = messages.some(m => m.patientId === p.id && m.text === msgText && m.date === todayDate) ||
+                           newMessages.some(m => m.patientId === p.id && m.text === msgText);
+            
+            if (!exists) {
+              newMessages.push({
+                id: `auto-${Date.now()}-${generatedCount}`,
+                patientId: p.id,
+                text: msgText,
+                date: todayDate,
+                status: 'pendente',
+                createdBy: user.uid
+              });
+              generatedCount++;
+            }
+          }
+        }
+      } else if (rule.type === 'boas_vindas') {
+        for (const p of patients) {
+          if (!p.createdAt) continue;
+          const createdDate = new Date(p.createdAt);
+          createdDate.setHours(0, 0, 0, 0);
+          
+          if (today.getTime() === createdDate.getTime()) {
+            const msgText = rule.messageTemplate.replace('{nome}', p.name);
+            const exists = messages.some(m => m.patientId === p.id && m.text === msgText) ||
+                           newMessages.some(m => m.patientId === p.id && m.text === msgText);
+            
+            if (!exists) {
+              newMessages.push({
+                id: `auto-${Date.now()}-${generatedCount}`,
+                patientId: p.id,
+                text: msgText,
+                date: todayDate,
+                status: 'pendente',
+                createdBy: user.uid
+              });
+              generatedCount++;
             }
           }
         }
@@ -428,86 +405,93 @@ export default function App() {
 
           if (match && rule.conditionValue) {
             const msgText = rule.messageTemplate.replace('{nome}', p.name);
-            const exists = messages.some(m => m.patientId === p.id && m.text === msgText);
+            const exists = messages.some(m => m.patientId === p.id && m.text === msgText) ||
+                           newMessages.some(m => m.patientId === p.id && m.text === msgText);
             
             if (!exists) {
-              try {
-                await addDoc(collection(db, 'messages'), {
-                  patientId: p.id,
-                  text: msgText,
-                  date: todayDate,
-                  status: 'pendente',
-                  createdBy: user.uid
-                });
-                generatedCount++;
-              } catch (e) {
-                console.error(e);
-              }
+              newMessages.push({
+                id: `auto-${Date.now()}-${generatedCount}`,
+                patientId: p.id,
+                text: msgText,
+                date: todayDate,
+                status: 'pendente',
+                createdBy: user.uid
+              });
+              generatedCount++;
             }
           }
         }
       }
     }
+    if (newMessages.length > 0) {
+      setMessages(prev => [...prev, ...newMessages]);
+    }
     showToast(`${generatedCount} nova(s) mensagem(ns) gerada(s)!`);
   };
 
-  const handleFormSubmit = async (e, type) => {
+  const handleFormSubmit = (e, type) => {
     e.preventDefault();
     if (!user) return;
     const formData = new FormData(e.target);
     const data: any = Object.fromEntries(formData.entries());
 
-    try {
-      if (type === 'paciente') {
-        if (editingPatient) {
-          await updateDoc(doc(db, 'patients', editingPatient.id), {
-            ...data,
-            updatedAt: serverTimestamp()
-          });
-          showToast('Paciente atualizado!');
-          setEditingPatient(null);
-        } else {
-          await addDoc(collection(db, 'patients'), {
-            ...data,
-            createdAt: serverTimestamp(),
-            createdBy: user.uid
-          });
-          showToast('Paciente cadastrado!');
-        }
-      } else if (type === 'agenda') {
-        await addDoc(collection(db, 'appointments'), {
+    if (type === 'paciente') {
+      if (editingPatient) {
+        setPatients(prev => prev.map(p => p.id === editingPatient.id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p));
+        showToast('Paciente atualizado!');
+        setEditingPatient(null);
+      } else {
+        const newPatient: Patient = {
           ...data,
-          status: 'agendado',
+          id: Date.now().toString(),
+          createdAt: new Date().toISOString(),
           createdBy: user.uid
-        });
-        showToast('Consulta agendada!');
-      } else if (type === 'financeiro') {
-        await addDoc(collection(db, 'finances'), {
-          ...data,
-          amount: parseFloat(data.amount),
-          status: 'pendente',
-          createdBy: user.uid
-        });
-        showToast('Lançamento registrado!');
-      } else if (type === 'mensagem') {
-        await addDoc(collection(db, 'messages'), {
-          ...data,
-          status: 'pendente',
-          createdBy: user.uid
-        });
-        showToast('Mensagem agendada!');
-      } else if (type === 'automacao') {
-        await addDoc(collection(db, 'automationRules'), {
-          ...data,
-          daysOffset: parseInt(data.daysOffset),
-          createdBy: user.uid
-        });
-        showToast('Regra de automação criada!');
+        };
+        setPatients(prev => [...prev, newPatient]);
+        showToast('Paciente cadastrado!');
       }
-      setModal(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, type);
+    } else if (type === 'agenda') {
+      const newApp: Appointment = {
+        ...data,
+        id: Date.now().toString(),
+        status: 'agendado',
+        createdBy: user.uid
+      };
+      setAppointments(prev => [...prev, newApp]);
+      showToast('Consulta agendada!');
+    } else if (type === 'financeiro') {
+      const newFinance: Finance = {
+        ...data,
+        id: Date.now().toString(),
+        amount: parseFloat(data.amount),
+        status: 'pendente',
+        createdBy: user.uid
+      };
+      setFinances(prev => [...prev, newFinance]);
+      showToast('Lançamento registrado!');
+    } else if (type === 'mensagem') {
+      const newMessage: Message = {
+        patientId: data.patientId,
+        text: messageDraft || data.text,
+        date: data.date,
+        id: Date.now().toString(),
+        status: 'pendente',
+        createdBy: user.uid
+      };
+      setMessages(prev => [...prev, newMessage]);
+      showToast('Mensagem agendada!');
+      setMessageDraft('');
+    } else if (type === 'automacao') {
+      const newRule: AutomationRule = {
+        ...data,
+        id: Date.now().toString(),
+        daysOffset: parseInt(data.daysOffset),
+        createdBy: user.uid
+      };
+      setAutomationRules(prev => [...prev, newRule]);
+      showToast('Regra de automação criada!');
     }
+    setModal(null);
   };
 
   // --- Cálculos ---
@@ -519,6 +503,15 @@ export default function App() {
     const despesas = finances.filter(f => f.type === 'despesa').reduce((acc, curr) => acc + curr.amount, 0);
     return { receitas, despesas, saldo: receitas - despesas };
   }, [finances]);
+
+  const birthdayPatients = useMemo(() => {
+    const currentMonth = new Date().getMonth() + 1;
+    return patients.filter(p => {
+      if (!p.birthDate) return false;
+      const birthMonth = parseInt(p.birthDate.split('-')[1]);
+      return birthMonth === currentMonth;
+    });
+  }, [patients]);
 
   if (isLoading) return <ErrorBoundary><div className="h-screen flex items-center justify-center bg-slate-50"><RefreshCcw className="animate-spin text-blue-600" /></div></ErrorBoundary>;
 
@@ -879,8 +872,9 @@ export default function App() {
                       <Gift size={40} />
                     </div>
                     <h3 className="text-xl font-bold text-slate-800">Aniversariantes do Mês</h3>
-                    <p className="text-slate-500 text-sm max-w-xs">Mantenha o relacionamento com seus pacientes enviando uma mensagem especial.</p>
-                    <button onClick={() => setActiveTab('mensagens')} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">Ver Lista</button>
+                    <div className="text-4xl font-black text-indigo-600">{birthdayPatients.length}</div>
+                    <p className="text-slate-500 text-sm max-w-xs">Pacientes que fazem aniversário este mês.</p>
+                    <button onClick={() => setModal('aniversariantes')} className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100">Ver Lista</button>
                   </div>
                 </div>
               </div>
@@ -920,10 +914,20 @@ export default function App() {
                           </td>
                           <td className="px-6 py-4 text-sm text-slate-500">{app.type}</td>
                           <td className="px-6 py-4">
-                            <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              app.status === 'compareceu' ? 'bg-emerald-100 text-emerald-700' : 
-                              app.status === 'faltou' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
-                            }`}>{app.status}</span>
+                            <button 
+                              onClick={() => {
+                                const statusCycle: Appointment['status'][] = ['agendado', 'compareceu', 'faltou'];
+                                const currentIndex = statusCycle.indexOf(app.status);
+                                const nextStatus = statusCycle[(currentIndex + 1) % statusCycle.length];
+                                handleStatusChange(app.id, nextStatus);
+                              }}
+                              className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all hover:scale-105 ${
+                                app.status === 'compareceu' ? 'bg-emerald-100 text-emerald-700' : 
+                                app.status === 'faltou' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                              }`}
+                            >
+                              {app.status}
+                            </button>
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex justify-end space-x-2">
@@ -1220,6 +1224,8 @@ export default function App() {
                               <div className="font-bold text-slate-800 text-sm">
                                 {rule.type === 'pos_consulta' && 'Pós-Consulta'}
                                 {rule.type === 'lembrete_consulta' && 'Lembrete de Consulta'}
+                                {rule.type === 'aniversario' && 'Aniversário'}
+                                {rule.type === 'boas_vindas' && 'Boas-Vindas'}
                                 {rule.type === 'patologia' && `Patologia: ${rule.conditionValue}`}
                                 {rule.type === 'medicacao' && `Medicação: ${rule.conditionValue}`}
                               </div>
@@ -1228,14 +1234,10 @@ export default function App() {
                               </div>
                               <div className="text-xs text-slate-400 mt-1 line-clamp-1">"{rule.messageTemplate}"</div>
                             </div>
-                            <button onClick={async () => {
+                            <button onClick={() => {
                               if (window.confirm('Excluir regra?')) {
-                                try {
-                                  await deleteDoc(doc(db, 'automationRules', rule.id));
-                                  showToast('Regra excluída');
-                                } catch (e) {
-                                  showToast('Erro ao excluir regra');
-                                }
+                                setAutomationRules(prev => prev.filter(r => r.id !== rule.id));
+                                showToast('Regra excluída');
                               }
                             }} className="text-slate-300 hover:text-red-500 p-2">
                               <Trash2 size={18} />
@@ -1320,12 +1322,39 @@ export default function App() {
                   {modal === 'financeiro' && 'Lançamento Financeiro'}
                   {modal === 'mensagem' && 'Nova Mensagem'}
                   {modal === 'automacao' && 'Nova Regra de Automação'}
+                  {modal === 'aniversariantes' && 'Aniversariantes do Mês'}
                 </h3>
-                <button onClick={() => { setModal(null); setEditingPatient(null); }} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+                <button onClick={() => { setModal(null); setEditingPatient(null); setMessageDraft(''); }} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
               </div>
 
               <div className="p-8">
                 <form onSubmit={(e) => handleFormSubmit(e, modal)} className="space-y-4">
+                  {modal === 'aniversariantes' && (
+                    <div className="space-y-4">
+                      {birthdayPatients.length === 0 ? (
+                        <p className="text-center text-slate-500 py-4">Nenhum aniversariante este mês.</p>
+                      ) : (
+                        <div className="max-h-[400px] overflow-y-auto space-y-2 pr-2">
+                          {birthdayPatients.map(p => (
+                            <div key={p.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+                              <div>
+                                <p className="font-bold text-slate-800">{p.name}</p>
+                                <p className="text-xs text-slate-500">Dia {p.birthDate.split('-')[2]}</p>
+                              </div>
+                              <button 
+                                onClick={() => { setSelectedPatientId(p.id); setModal('mensagem'); }}
+                                className="p-2 bg-indigo-100 text-indigo-600 rounded-lg hover:bg-indigo-200 transition-all"
+                              >
+                                <MessageSquare size={16} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <button type="button" onClick={() => setModal(null)} className="w-full py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-all">FECHAR</button>
+                    </div>
+                  )}
+
                   {modal === 'paciente' && (
                       <>
                         <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome Completo</label><input name="name" defaultValue={editingPatient?.name} required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
@@ -1391,7 +1420,35 @@ export default function App() {
                             {patients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                           </select>
                         </div>
-                        <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mensagem</label><textarea name="text" required rows="4" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Escreva aqui..."></textarea></div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Modelos de Mensagem</label>
+                          <select 
+                            onChange={(e) => {
+                              const selectedPatient = patients.find(p => p.id === (document.getElementsByName('patientId')[0] as HTMLSelectElement).value);
+                              const name = selectedPatient ? selectedPatient.name : 'Paciente';
+                              setMessageDraft(e.target.value.replace('{nome}', name));
+                            }}
+                            className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 mb-2"
+                          >
+                            <option value="">Selecione um modelo...</option>
+                            <option value="Seja muito bem-vindo(a) à TopClinic, {nome}! 🌟 É um prazer ter você conosco. Estamos aqui para cuidar da sua saúde com excelência.">Boas-Vindas</option>
+                            <option value="Parabéns {nome}! 🎂 Desejamos muita saúde, paz e felicidades no seu dia especial. Um grande abraço da equipe TopClinic!">Aniversário</option>
+                            <option value="Olá {nome}, como você está se sentindo após a consulta de ontem? Qualquer dúvida, estamos à disposição! 😊">Pós-Consulta</option>
+                            <option value="Olá {nome}, confirmamos sua consulta para amanhã. Podemos contar com sua presença? 🏥">Lembrete de Consulta</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mensagem</label>
+                          <textarea 
+                            name="text" 
+                            required 
+                            rows={4} 
+                            value={messageDraft}
+                            onChange={(e) => setMessageDraft(e.target.value)}
+                            className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+                            placeholder="Escreva aqui..."
+                          ></textarea>
+                        </div>
                         <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data Programada</label><input name="date" type="date" required defaultValue={todayDate} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
                       </>
                     )}
@@ -1403,6 +1460,8 @@ export default function App() {
                           <select name="type" required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="lembrete_consulta">Lembrete Pré-Consulta</option>
                             <option value="pos_consulta">Acompanhamento Pós-Consulta</option>
+                            <option value="aniversario">Aniversário</option>
+                            <option value="boas_vindas">Boas-Vindas (Novo Paciente)</option>
                             <option value="patologia">Baseado em Patologia</option>
                             <option value="medicacao">Baseado em Medicação</option>
                           </select>

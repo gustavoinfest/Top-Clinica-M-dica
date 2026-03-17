@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: patients
+    // Fields: name (string), phone (string), email (string), birthDate (string), createdAt (string), createdBy (string)
+    //
+    // Collection: appointments
+    // Fields: patientId (string), date (string), time (string), status (string), type (string), createdBy (string)
+    //
+    // Collection: finances
+    // Fields: date (string), description (string), type (string), amount (number), status (string), patientId (string), createdBy (string)
+    //
+    // Collection: messages
+    // Fields: patientId (string), text (string), date (string), status (string), createdBy (string)
+    //
+    // Collection: automationRules
+    // Fields: conditionType (string), conditionValue (string), daysAfter (number), messageTemplate (string), createdBy (string)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(data) {
+      return isAuthenticated() && request.auth.uid == data.createdBy;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "gustavoinfest@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidPatient(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() < 20 &&
+             (!('pathology' in data) || data.pathology is string) &&
+             (!('medication' in data) || data.medication is string);
+    }
+
+    function isValidAppointment(data) {
+      return data.patientId is string && data.date is string && data.time is string &&
+             data.status in ['agendado', 'confirmado', 'compareceu', 'faltou', 'cancelado'];
+    }
+
+    function isValidFinance(data) {
+      return data.date is string && data.description is string && data.type in ['receita', 'despesa'] &&
+             data.amount is number && data.status in ['concluido', 'pendente'];
+    }
+
+    function isValidMessage(data) {
+      return data.patientId is string && data.text is string && data.date is string &&
+             data.status in ['pendente', 'enviada'];
+    }
+
+    function isValidAutomationRule(data) {
+      return data.type in ['pos_consulta', 'lembrete_consulta', 'patologia', 'medicacao'] &&
+             (!('conditionValue' in data) || data.conditionValue is string) &&
+             data.daysOffset is number && data.messageTemplate is string;
+    }
+
+    // Rules
+    match /patients/{patientId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidPatient(request.resource.data) && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && isValidPatient(request.resource.data) && (isOwner(resource.data) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data) || isAdmin());
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAppointment(request.resource.data) && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && isValidAppointment(request.resource.data) && (isOwner(resource.data) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data) || isAdmin());
+    }
+
+    match /finances/{financeId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidFinance(request.resource.data) && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && isValidFinance(request.resource.data) && (isOwner(resource.data) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data) || isAdmin());
+    }
+
+    match /messages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMessage(request.resource.data) && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && isValidMessage(request.resource.data) && (isOwner(resource.data) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data) || isAdmin());
+    }
+
+    match /automationRules/{ruleId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAutomationRule(request.resource.data) && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAuthenticated() && isValidAutomationRule(request.resource.data) && (isOwner(resource.data) || isAdmin());
+      allow delete: if isAuthenticated() && (isOwner(resource.data) || isAdmin());
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}

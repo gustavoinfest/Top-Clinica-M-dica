@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "Information about a clinic patient",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "name": { "type": "string", "description": "Full name" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "email": { "type": "string", "description": "Email address" },
+        "pathology": { "type": "string", "description": "Patient pathology/condition" },
+        "medication": { "type": "string", "description": "Patient medication" },
+        "birthDate": { "type": "string", "description": "Birth date in YYYY-MM-DD format" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "createdBy": { "type": "string", "description": "User ID who created the record" }
+      },
+      "required": ["name", "phone"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "Medical appointment record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "patientId": { "type": "string", "description": "Reference to the patient" },
+        "date": { "type": "string", "description": "Appointment date in YYYY-MM-DD format" },
+        "time": { "type": "string", "description": "Appointment time in HH:MM format" },
+        "status": { "type": "string", "enum": ["agendado", "confirmado", "compareceu", "faltou", "cancelado"], "description": "Current status" },
+        "type": { "type": "string", "description": "Type of consultation" },
+        "createdBy": { "type": "string", "description": "User ID who created the record" }
+      },
+      "required": ["patientId", "date", "time", "status"]
+    },
+    "Finance": {
+      "title": "Finance",
+      "description": "Financial transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "date": { "type": "string", "description": "Transaction date" },
+        "description": { "type": "string", "description": "Description of the transaction" },
+        "type": { "type": "string", "enum": ["receita", "despesa"], "description": "Type of transaction" },
+        "amount": { "type": "number", "description": "Monetary value" },
+        "status": { "type": "string", "enum": ["concluido", "pendente"], "description": "Payment status" },
+        "patientId": { "type": "string", "description": "Optional reference to a patient" },
+        "createdBy": { "type": "string", "description": "User ID who created the record" }
+      },
+      "required": ["date", "description", "type", "amount", "status"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Communication record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "patientId": { "type": "string", "description": "Reference to the patient" },
+        "text": { "type": "string", "description": "Message content" },
+        "date": { "type": "string", "description": "Scheduled or sent date" },
+        "status": { "type": "string", "enum": ["pendente", "enviada"], "description": "Message status" },
+        "createdBy": { "type": "string", "description": "User ID who created the record" }
+      },
+      "required": ["patientId", "text", "date", "status"]
+    },
+    "AutomationRule": {
+      "title": "Automation Rule",
+      "description": "Rules for automatic message scheduling",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "type": { "type": "string", "enum": ["pos_consulta", "lembrete_consulta", "patologia", "medicacao"], "description": "Type of rule" },
+        "conditionValue": { "type": "string", "description": "Value of the condition (e.g., Diabetes)" },
+        "daysOffset": { "type": "number", "description": "Days offset (negative for before, positive for after)" },
+        "messageTemplate": { "type": "string", "description": "Template text" },
+        "createdBy": { "type": "string", "description": "User ID who created the rule" }
+      },
+      "required": ["type", "daysOffset", "messageTemplate"]
+    }
+  },
+  "firestore": {
+    "/patients/{patientId}": { "schema": "Patient", "description": "Collection of patients" },
+    "/appointments/{appointmentId}": { "schema": "Appointment", "description": "Collection of appointments" },
+    "/finances/{financeId}": { "schema": "Finance", "description": "Collection of financial transactions" },
+    "/messages/{messageId}": { "schema": "Message", "description": "Collection of messages" },
+    "/automationRules/{ruleId}": { "schema": "AutomationRule", "description": "Collection of automation rules" }
+  }
+}

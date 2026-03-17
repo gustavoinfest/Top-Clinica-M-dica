@@ -1,0 +1,5 @@
+{
+  "name": "TopClinic - Gestão Médica",
+  "description": "Sistema completo para gestão de clínicas com prontuário, agenda, financeiro e automação de CRM via WhatsApp.",
+  "requestFramePermissions": []
+}

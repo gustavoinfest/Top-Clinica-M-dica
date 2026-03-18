@@ -293,7 +293,7 @@ export default function App() {
             id: Date.now().toString(),
             patientId: app.patientId,
             text: `Olá ${getPatientName(app.patientId)}, notamos que você não pôde comparecer à consulta. Podemos reagendar?`,
-            date: new Date().toISOString().split('T')[0],
+            date: new Date().toLocaleDateString('en-CA'),
             status: 'pendente',
             createdBy: user.uid
           };
@@ -402,7 +402,7 @@ export default function App() {
               type: file.type,
               size: file.size,
               data: ev.target?.result as string,
-              createdAt: new Date().toISOString()
+              createdAt: new Date().toLocaleString('pt-BR')
             });
           };
           reader.readAsDataURL(file);
@@ -485,7 +485,8 @@ export default function App() {
           if (rule.type === 'pos_consulta' && app.status !== 'compareceu') continue;
           if (rule.type === 'lembrete_consulta' && !['agendado', 'confirmado'].includes(app.status)) continue;
 
-          const appDate = new Date(app.date);
+          const [year, month, day] = app.date.split('-').map(Number);
+          const appDate = new Date(year, month - 1, day);
           appDate.setHours(0, 0, 0, 0);
           
           const targetDate = new Date(appDate);
@@ -512,7 +513,8 @@ export default function App() {
       } else if (rule.type === 'aniversario') {
         for (const p of patients) {
           if (!p.birthDate) continue;
-          const birthDate = new Date(p.birthDate);
+          const [bYear, bMonth, bDay] = p.birthDate.split('-').map(Number);
+          const birthDate = new Date(bYear, bMonth - 1, bDay);
           if (today.getMonth() === birthDate.getMonth() && today.getDate() === birthDate.getDate()) {
             const msgText = rule.messageTemplate.replace('{nome}', p.name);
             const exists = messages.some(m => m.patientId === p.id && m.text === msgText && m.date === todayDate) ||
@@ -595,14 +597,14 @@ export default function App() {
 
     if (type === 'paciente') {
       if (editingPatient) {
-        setPatients(prev => prev.map(p => p.id === editingPatient.id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p));
+        setPatients(prev => prev.map(p => p.id === editingPatient.id ? { ...p, ...data, updatedAt: new Date().toLocaleString('pt-BR') } : p));
         showToast('Paciente atualizado!');
         setEditingPatient(null);
       } else {
         const newPatient: Patient = {
           ...data,
           id: Date.now().toString(),
-          createdAt: new Date().toISOString(),
+          createdAt: new Date().toLocaleString('pt-BR'),
           createdBy: user.uid
         };
         setPatients(prev => [...prev, newPatient]);
@@ -653,12 +655,13 @@ export default function App() {
   };
 
   // --- Cálculos ---
-  const todayDate = new Date().toISOString().split('T')[0];
+  const todayDate = new Date().toLocaleDateString('en-CA'); // en-CA format is YYYY-MM-DD
   const todayAppointments = appointments.filter(a => a.date === todayDate);
   
   const reportData = useMemo(() => {
     const filtered = finances.filter(f => {
-      const fDate = new Date(f.date);
+      const [year, month, day] = f.date.split('-').map(Number);
+      const fDate = new Date(year, month - 1, day);
       return (fDate.getMonth() + 1) === reportMonth && fDate.getFullYear() === reportYear;
     });
     const receitas = filtered.filter(f => f.type === 'receita').reduce((acc, curr) => acc + curr.amount, 0);

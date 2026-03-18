@@ -36,7 +36,7 @@ interface Patient {
 
 interface AutomationRule {
   id: string;
-  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao' | 'aniversario' | 'boas_vindas';
+  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao' | 'aniversario' | 'boas_vindas' | 'avaliacao_google';
   conditionValue?: string;
   daysOffset: number;
   messageTemplate: string;
@@ -124,6 +124,10 @@ export default function App() {
 
   // Estados da aplicação
   const [clinicName, setClinicName] = useState('TopClinic');
+  const [clinicSettings, setClinicSettings] = useState({
+    googleReviewLink: '',
+    whatsappNumber: ''
+  });
   const [patients, setPatients] = useState<Patient[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [finances, setFinances] = useState<Finance[]>([]);
@@ -201,10 +205,20 @@ export default function App() {
           daysOffset: 0,
           messageTemplate: 'Seja muito bem-vindo(a) à TopClinic, {nome}! 🌟 É um prazer ter você conosco. Estamos aqui para cuidar da sua saúde com excelência.',
           createdBy: 'local-user'
+        },
+        {
+          id: 'def-5',
+          type: 'avaliacao_google',
+          daysOffset: 1,
+          messageTemplate: 'Olá {nome}, o que achou da sua consulta? Sua opinião é muito importante para nós! Avalie nosso atendimento no Google: {link_google}',
+          createdBy: 'local-user'
         }
       ];
       setAutomationRules(defaultRules);
     }
+
+    const savedSettings = localStorage.getItem('topclinic_settings');
+    if (savedSettings) setClinicSettings(JSON.parse(savedSettings));
 
     setIsLoading(false);
     setIsAuthReady(true);
@@ -218,8 +232,9 @@ export default function App() {
       localStorage.setItem('topclinic_finances', JSON.stringify(finances));
       localStorage.setItem('topclinic_messages', JSON.stringify(messages));
       localStorage.setItem('topclinic_rules', JSON.stringify(automationRules));
+      localStorage.setItem('topclinic_settings', JSON.stringify(clinicSettings));
     }
-  }, [patients, appointments, finances, messages, automationRules, isAuthReady]);
+  }, [patients, appointments, finances, messages, automationRules, clinicSettings, isAuthReady]);
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -480,9 +495,9 @@ export default function App() {
     const newMessages: Message[] = [];
 
     for (const rule of automationRules) {
-      if (rule.type === 'pos_consulta' || rule.type === 'lembrete_consulta') {
+      if (rule.type === 'pos_consulta' || rule.type === 'lembrete_consulta' || rule.type === 'avaliacao_google') {
         for (const app of appointments) {
-          if (rule.type === 'pos_consulta' && app.status !== 'compareceu') continue;
+          if ((rule.type === 'pos_consulta' || rule.type === 'avaliacao_google') && app.status !== 'compareceu') continue;
           if (rule.type === 'lembrete_consulta' && !['agendado', 'confirmado'].includes(app.status)) continue;
 
           const [year, month, day] = app.date.split('-').map(Number);
@@ -493,7 +508,11 @@ export default function App() {
           targetDate.setDate(targetDate.getDate() + rule.daysOffset);
 
           if (today.getTime() === targetDate.getTime()) {
-            const msgText = rule.messageTemplate.replace('{nome}', getPatientName(app.patientId));
+            let msgText = rule.messageTemplate.replace('{nome}', getPatientName(app.patientId));
+            if (rule.type === 'avaliacao_google') {
+              msgText = msgText.replace('{link_google}', clinicSettings.googleReviewLink || 'https://g.page/r/exemplo/review');
+            }
+            
             const exists = messages.some(m => m.patientId === app.patientId && m.text === msgText) || 
                            newMessages.some(m => m.patientId === app.patientId && m.text === msgText);
             
@@ -1331,7 +1350,15 @@ export default function App() {
             {activeTab === 'mensagens' && (
               <div className="space-y-6">
                 <div className="flex justify-between items-center">
-                  <h2 className="text-2xl font-bold text-slate-800">WhatsApp & Automações</h2>
+                  <div className="flex items-center space-x-4">
+                    <h2 className="text-2xl font-bold text-slate-800">WhatsApp & Automações</h2>
+                    {clinicSettings.whatsappNumber && (
+                      <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold flex items-center space-x-1">
+                        <CheckCircle size={14} />
+                        <span>Business Conectado</span>
+                      </span>
+                    )}
+                  </div>
                   <div className="flex space-x-3">
                     <button onClick={processAutomations} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-semibold flex items-center space-x-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
                       <RefreshCcw size={20} />
@@ -1402,6 +1429,44 @@ export default function App() {
                     </div>
                   </section>
 
+                  <hr className="border-slate-50" />
+
+                  <section>
+                    <h3 className="text-lg font-bold text-slate-800 mb-4">Integrações</h3>
+                    <div className="max-w-md space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Link de Avaliação do Google</label>
+                        <input 
+                          type="text" 
+                          placeholder="Ex: https://g.page/r/exemplo/review"
+                          value={clinicSettings.googleReviewLink} 
+                          onChange={e => setClinicSettings({...clinicSettings, googleReviewLink: e.target.value})}
+                          className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">Este link será enviado nas automações de "Avaliação no Google".</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">WhatsApp Business (Opcional)</label>
+                        <div className="flex space-x-2">
+                          <input 
+                            type="text" 
+                            placeholder="Ex: 5511999999999"
+                            value={clinicSettings.whatsappNumber} 
+                            onChange={e => setClinicSettings({...clinicSettings, whatsappNumber: e.target.value})}
+                            className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                          />
+                          <button 
+                            onClick={() => showToast('WhatsApp Business vinculado com sucesso!')}
+                            className="bg-emerald-500 text-white px-4 py-2 rounded-xl font-bold text-sm hover:bg-emerald-600 transition-all whitespace-nowrap"
+                          >
+                            Vincular
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">Vincule seu número para usar a API oficial (simulado nesta versão).</p>
+                      </div>
+                    </div>
+                  </section>
+
                   <section>
                     <h3 className="text-lg font-bold text-slate-800 mb-4">Buscar Paciente</h3>
                     <div className="max-w-md relative">
@@ -1452,6 +1517,7 @@ export default function App() {
                               <div className="font-bold text-slate-800 text-sm">
                                 {rule.type === 'pos_consulta' && 'Pós-Consulta'}
                                 {rule.type === 'lembrete_consulta' && 'Lembrete de Consulta'}
+                                {rule.type === 'avaliacao_google' && 'Avaliação no Google'}
                                 {rule.type === 'aniversario' && 'Aniversário'}
                                 {rule.type === 'boas_vindas' && 'Boas-Vindas'}
                                 {rule.type === 'patologia' && `Patologia: ${rule.conditionValue}`}
@@ -1877,6 +1943,7 @@ export default function App() {
                           <select name="type" required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="lembrete_consulta">Lembrete Pré-Consulta</option>
                             <option value="pos_consulta">Acompanhamento Pós-Consulta</option>
+                            <option value="avaliacao_google">Avaliação no Google (Pós-Consulta)</option>
                             <option value="aniversario">Aniversário</option>
                             <option value="boas_vindas">Boas-Vindas (Novo Paciente)</option>
                             <option value="patologia">Baseado em Patologia</option>
@@ -1895,7 +1962,7 @@ export default function App() {
                         <div>
                           <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mensagem</label>
                           <textarea name="messageTemplate" required rows="4" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Olá {nome}, sua consulta é amanhã..."></textarea>
-                          <p className="text-[10px] text-slate-400 mt-1">Você pode usar {'{nome}'} para o nome do paciente.</p>
+                          <p className="text-[10px] text-slate-400 mt-1">Você pode usar {'{nome}'} e {'{link_google}'} (para avaliação).</p>
                         </div>
                       </>
                     )}

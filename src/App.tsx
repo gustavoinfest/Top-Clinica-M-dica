@@ -7,7 +7,20 @@ import {
   Activity, ChevronRight, Menu, Trash2, Edit, Check, Smartphone, LogOut, AlertCircle, Edit2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
 // Types
+interface PatientDocument {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  data: string; // base64
+  createdAt: string;
+}
+
 interface Patient {
   id: string;
   name: string;
@@ -16,6 +29,7 @@ interface Patient {
   birthDate: string;
   pathology?: string;
   medication?: string;
+  documents?: PatientDocument[];
   createdAt?: any;
   createdBy: string;
 }
@@ -123,7 +137,14 @@ export default function App() {
   const [messageDraft, setMessageDraft] = useState('');
   const [configSearchTerm, setConfigSearchTerm] = useState('');
   const [showBirthdayModal, setShowBirthdayModal] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmDeleteDoc, setConfirmDeleteDoc] = useState<{patientId: string, docId: string} | null>(null);
+  const [previewFile, setPreviewFile] = useState<PatientDocument | null>(null);
+  const [reportMonth, setReportMonth] = useState(new Date().getMonth() + 1);
+  const [reportYear, setReportYear] = useState(new Date().getFullYear());
+  const [selectedPatientFiles, setSelectedPatientFiles] = useState<PatientDocument[]>([]);
   const fileInputRef = useRef<any>(null);
+  const patientFileRef = useRef<any>(null);
 
   // Local Persistence and Auth Simulation
   useEffect(() => {
@@ -286,9 +307,14 @@ export default function App() {
   };
 
   const handleDeletePatient = (id) => {
-    if (window.confirm('Deseja realmente excluir este paciente?')) {
-      setPatients(prev => prev.filter(p => p.id !== id));
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDelete = () => {
+    if (confirmDeleteId) {
+      setPatients(prev => prev.filter(p => p.id !== confirmDeleteId));
       showToast('Paciente excluído');
+      setConfirmDeleteId(null);
     }
   };
 
@@ -312,7 +338,139 @@ export default function App() {
     a.href = url;
     a.download = `backup_topclinic_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
-    showToast('Backup exportado!');
+    showToast('Backup JSON gerado!');
+  };
+
+  const exportData = (type: 'pacientes' | 'financeiro', format: 'csv' | 'xlsx') => {
+    const data = type === 'pacientes' ? patients : finances;
+    if (data.length === 0) {
+      showToast('Nenhum dado para exportar');
+      return;
+    }
+
+    const filename = `${type}_${new Date().toISOString().split('T')[0]}`;
+
+    if (format === 'xlsx') {
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Dados");
+      XLSX.writeFile(workbook, `${filename}.xlsx`);
+      showToast('Arquivo XLSX gerado!');
+    } else {
+      const headers = Object.keys(data[0]).join(',');
+      const rows = data.map(obj => Object.values(obj).map(val => {
+        const s = String(val).replace(/"/g, '""');
+        return `"${s}"`;
+      }).join(',')).join('\n');
+      const csvContent = headers + "\n" + rows;
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${filename}.csv`);
+      link.click();
+      showToast('Arquivo CSV gerado!');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, patientId: string) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
+
+    const validFiles = files.filter((file: File) => {
+      if (file.size > 1024 * 1024) {
+        showToast(`Arquivo ${file.name} muito grande (máx 1MB)`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) {
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      const newDocs = await Promise.all(validFiles.map((file: File) => {
+        return new Promise<PatientDocument>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            resolve({
+              id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              data: ev.target?.result as string,
+              createdAt: new Date().toISOString()
+            });
+          };
+          reader.readAsDataURL(file);
+        });
+      }));
+
+      setPatients(prev => prev.map(p => {
+        if (p.id === patientId) {
+          return { ...p, documents: [...(p.documents || []), ...newDocs] };
+        }
+        return p;
+      }));
+      
+      showToast(`${newDocs.length} arquivo(s) anexado(s)!`);
+    } catch (error) {
+      console.error('Erro no upload:', error);
+      showToast('Erro ao processar arquivos');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const deleteDocument = (patientId: string, docId: string) => {
+    setConfirmDeleteDoc({ patientId, docId });
+  };
+
+  const confirmDeleteDocument = () => {
+    if (confirmDeleteDoc) {
+      const { patientId, docId } = confirmDeleteDoc;
+      setPatients(prev => prev.map(p => {
+        if (p.id === patientId) {
+          return { ...p, documents: (p.documents || []).filter(d => d.id !== docId) };
+        }
+        return p;
+      }));
+      showToast('Documento removido');
+      setConfirmDeleteDoc(null);
+    }
+  };
+
+  const generateFinancialPDF = () => {
+    const doc = new jsPDF();
+    const monthName = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][reportMonth - 1];
+    
+    doc.setFontSize(20);
+    doc.text(`Relatório Financeiro - ${clinicName}`, 14, 22);
+    doc.setFontSize(12);
+    doc.text(`Período: ${monthName} / ${reportYear}`, 14, 32);
+    
+    const tableData = reportData.items.map(f => [
+      f.date.split('-').reverse().join('/'),
+      f.description,
+      f.type.toUpperCase(),
+      `R$ ${f.amount.toFixed(2)}`
+    ]);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['Data', 'Descrição', 'Tipo', 'Valor']],
+      body: tableData,
+      foot: [['', '', 'SALDO LÍQUIDO', `R$ ${reportData.saldo.toFixed(2)}`]],
+      theme: 'grid',
+      headStyles: { fillColor: [30, 41, 59] },
+      footStyles: { fillColor: [241, 245, 249], textColor: [30, 41, 59], fontStyle: 'bold' }
+    });
+
+    doc.save(`relatorio_${monthName.toLowerCase()}_${reportYear}.pdf`);
+    showToast('PDF gerado com sucesso!');
   };
 
   const processAutomations = () => {
@@ -498,11 +656,23 @@ export default function App() {
   const todayDate = new Date().toISOString().split('T')[0];
   const todayAppointments = appointments.filter(a => a.date === todayDate);
   
+  const reportData = useMemo(() => {
+    const filtered = finances.filter(f => {
+      const fDate = new Date(f.date);
+      return (fDate.getMonth() + 1) === reportMonth && fDate.getFullYear() === reportYear;
+    });
+    const receitas = filtered.filter(f => f.type === 'receita').reduce((acc, curr) => acc + curr.amount, 0);
+    const despesas = filtered.filter(f => f.type === 'despesa').reduce((acc, curr) => acc + curr.amount, 0);
+    return { items: filtered, receitas, despesas, saldo: receitas - despesas };
+  }, [finances, reportMonth, reportYear]);
+
   const financialSummary = useMemo(() => {
-    const receitas = finances.filter(f => f.type === 'receita').reduce((acc, curr) => acc + curr.amount, 0);
-    const despesas = finances.filter(f => f.type === 'despesa').reduce((acc, curr) => acc + curr.amount, 0);
-    return { receitas, despesas, saldo: receitas - despesas };
-  }, [finances]);
+    return { 
+      receitas: reportData.receitas, 
+      despesas: reportData.despesas, 
+      saldo: reportData.saldo 
+    };
+  }, [reportData]);
 
   const birthdayPatients = useMemo(() => {
     const currentMonth = new Date().getMonth() + 1;
@@ -816,12 +986,10 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {[
                     { label: 'Consultas Hoje', value: todayAppointments.length, icon: Calendar, color: 'blue' },
                     { label: 'Total Pacientes', value: patients.length, icon: Users, color: 'indigo' },
-                    { label: 'Receita Mensal', value: `R$ ${financialSummary.receitas.toFixed(2)}`, icon: TrendingUp, color: 'emerald' },
-                    { label: 'Saldo Líquido', value: `R$ ${financialSummary.saldo.toFixed(2)}`, icon: DollarSign, color: 'slate' },
                   ].map((stat, i) => (
                     <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center space-x-4">
                       <div className={`p-3 rounded-xl bg-${stat.color === 'blue' ? 'blue-50' : stat.color === 'indigo' ? 'indigo-50' : stat.color === 'emerald' ? 'emerald-50' : 'slate-50'} text-${stat.color === 'blue' ? 'blue-600' : stat.color === 'indigo' ? 'indigo-600' : stat.color === 'emerald' ? 'emerald-600' : 'slate-600'}`}>
@@ -952,9 +1120,25 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <h2 className="text-2xl font-bold text-slate-800">Pacientes Cadastrados</h2>
                   <div className="flex space-x-4">
+                    <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden">
+                      <button onClick={() => exportData('pacientes', 'csv')} className="px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 border-r border-slate-100 flex items-center space-x-1">
+                        <FileText size={14} />
+                        <span>CSV</span>
+                      </button>
+                      <button onClick={() => exportData('pacientes', 'xlsx')} className="px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 flex items-center space-x-1">
+                        <Save size={14} />
+                        <span>XLSX</span>
+                      </button>
+                    </div>
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input type="text" placeholder="Buscar..." className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64" />
+                      <input 
+                        type="text" 
+                        placeholder="Buscar..." 
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64" 
+                      />
                     </div>
                     <button onClick={() => setModal('paciente')} className="bg-blue-600 text-white px-6 py-2.5 rounded-xl font-semibold flex items-center space-x-2 hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
                       <Plus size={20} />
@@ -964,7 +1148,7 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {patients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(p => {
+                  {patients.filter(p => (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase())).map(p => {
                     const lastAppointment = appointments
                       .filter(a => a.patientId === p.id)
                       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
@@ -974,11 +1158,11 @@ export default function App() {
                         <div className="flex items-center justify-between mb-6">
                           <div className="flex items-center space-x-4">
                             <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 font-bold text-lg group-hover:bg-blue-600 group-hover:text-white transition-all">
-                              {p.name.charAt(0)}
+                              {(p.name || '?').charAt(0)}
                             </div>
                             <div>
-                              <h4 className="font-bold text-slate-800">{p.name}</h4>
-                              <p className="text-xs text-slate-400">{p.birthDate.split('-').reverse().join('/')}</p>
+                              <h4 className="font-bold text-slate-800">{p.name || 'Sem Nome'}</h4>
+                              <p className="text-xs text-slate-400">{p.birthDate ? p.birthDate.split('-').reverse().join('/') : 'Data não informada'}</p>
                             </div>
                           </div>
                           <div className="flex space-x-2">
@@ -1020,6 +1204,7 @@ export default function App() {
                         <div className="flex space-x-2">
                           <button onClick={() => { setSelectedPatientId(p.id); setModal('agenda'); }} className="flex-1 bg-slate-50 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-blue-50 hover:text-blue-600 transition-all">AGENDAR</button>
                           <button onClick={() => { setSelectedPatientId(p.id); setModal('mensagem'); }} className="flex-1 bg-slate-50 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-indigo-50 hover:text-indigo-600 transition-all">MENSAGEM</button>
+                          <button onClick={() => { setSelectedPatientId(p.id); setSelectedPatientFiles(p.documents || []); setModal('documentos'); }} className="flex-1 bg-slate-50 text-slate-600 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all">DOCS</button>
                         </div>
                       </div>
                     );
@@ -1030,12 +1215,52 @@ export default function App() {
 
             {activeTab === 'financeiro' && (
               <div className="space-y-8">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-2xl font-bold text-slate-800">Fluxo de Caixa</h2>
-                  <button onClick={() => setModal('financeiro')} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-semibold flex items-center space-x-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
-                    <Plus size={20} />
-                    <span>Lançamento</span>
-                  </button>
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Fluxo de Caixa</h2>
+                    <p className="text-sm text-slate-400">Gerencie as finanças da sua clínica</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                      <div className="flex items-center px-3 border-r border-slate-100 bg-slate-50">
+                        <Calendar size={16} className="text-slate-400" />
+                      </div>
+                      <select 
+                        value={reportMonth} 
+                        onChange={(e) => setReportMonth(parseInt(e.target.value))}
+                        className="px-3 py-2.5 text-sm outline-none border-r border-slate-100 font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((m, i) => (
+                          <option key={i} value={i + 1}>{m}</option>
+                        ))}
+                      </select>
+                      <select 
+                        value={reportYear} 
+                        onChange={(e) => setReportYear(parseInt(e.target.value))}
+                        className="px-3 py-2.5 text-sm outline-none font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        {[2024, 2025, 2026, 2027].map(y => (
+                          <option key={y} value={y}>{y}</option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div className="flex bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                      <button onClick={() => exportData('financeiro', 'xlsx')} className="px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 transition-all flex items-center space-x-2 border-r border-slate-100">
+                        <Save size={18} />
+                        <span>XLSX</span>
+                      </button>
+                      <button onClick={() => setModal('relatorio_financeiro')} className="px-4 py-2.5 text-sm font-bold text-blue-600 hover:bg-blue-50 transition-all flex items-center space-x-2">
+                        <FileText size={18} />
+                        <span>Gerar Relatório</span>
+                      </button>
+                    </div>
+
+                    <button onClick={() => setModal('financeiro')} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center space-x-2 hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
+                      <Plus size={20} />
+                      <span>Novo Lançamento</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1073,7 +1298,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
-                      {finances.sort((a,b) => b.id - a.id).map(f => (
+                      {reportData.items.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(f => (
                         <tr key={f.id} className="hover:bg-slate-50/50 transition-colors">
                           <td className="px-6 py-4 text-sm text-slate-500">{f.date.split('-').reverse().join('/')}</td>
                           <td className="px-6 py-4 font-bold text-slate-800">
@@ -1268,12 +1493,37 @@ export default function App() {
                           reader.onload = (ev) => {
                             try {
                               const data = JSON.parse(ev.target?.result as string);
-                              setPatients(data.patients || []);
-                              setAppointments(data.appointments || []);
-                              setFinances(data.finances || []);
-                              setMessages(data.messages || []);
-                              setClinicName(data.clinicName || 'TopClinic');
-                              showToast('Dados importados!');
+                              
+                              // Merge patients without duplicates
+                              setPatients(prev => {
+                                const existingIds = new Set(prev.map(p => p.id));
+                                const newOnes = (data.patients || []).filter(p => !existingIds.has(p.id));
+                                return [...prev, ...newOnes];
+                              });
+
+                              // Merge appointments
+                              setAppointments(prev => {
+                                const existingIds = new Set(prev.map(a => a.id));
+                                const newOnes = (data.appointments || []).filter(a => !existingIds.has(a.id));
+                                return [...prev, ...newOnes];
+                              });
+
+                              // Merge finances
+                              setFinances(prev => {
+                                const existingIds = new Set(prev.map(f => f.id));
+                                const newOnes = (data.finances || []).filter(f => !existingIds.has(f.id));
+                                return [...prev, ...newOnes];
+                              });
+
+                              // Merge messages
+                              setMessages(prev => {
+                                const existingIds = new Set(prev.map(m => m.id));
+                                const newOnes = (data.messages || []).filter(m => !existingIds.has(m.id));
+                                return [...prev, ...newOnes];
+                              });
+
+                              if (data.clinicName) setClinicName(data.clinicName);
+                              showToast('Dados importados e mesclados!');
                             } catch (err) {
                               showToast('Erro ao importar arquivo.');
                             }
@@ -1323,12 +1573,176 @@ export default function App() {
                   {modal === 'mensagem' && 'Nova Mensagem'}
                   {modal === 'automacao' && 'Nova Regra de Automação'}
                   {modal === 'aniversariantes' && 'Aniversariantes do Mês'}
+                  {modal === 'documentos' && `Documentos: ${getPatientName(selectedPatientId)}`}
+                  {modal === 'relatorio_financeiro' && `Relatório Financeiro - ${['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][reportMonth-1]} / ${reportYear}`}
                 </h3>
                 <button onClick={() => { setModal(null); setEditingPatient(null); setMessageDraft(''); }} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
               </div>
 
               <div className="p-8">
                 <form onSubmit={(e) => handleFormSubmit(e, modal)} className="space-y-4">
+                  {modal === 'documentos' && (
+                    <div className="space-y-6">
+                      <div className="flex justify-between items-center">
+                        <p className="text-xs text-slate-400 font-bold uppercase">Arquivos Anexados</p>
+                        <button 
+                          type="button" 
+                          onClick={() => patientFileRef.current.click()}
+                          className="text-blue-600 text-xs font-bold hover:underline flex items-center space-x-1"
+                        >
+                          <Plus size={14} />
+                          <span>Anexar Arquivo</span>
+                        </button>
+                        <input 
+                          type="file" 
+                          ref={patientFileRef} 
+                          className="hidden" 
+                          multiple
+                          onChange={(e) => handleFileUpload(e, selectedPatientId)}
+                        />
+                      </div>
+
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+                        {patients.find(p => p.id === selectedPatientId)?.documents?.length === 0 || !patients.find(p => p.id === selectedPatientId)?.documents ? (
+                          <p className="text-center text-slate-400 py-8 text-sm italic">Nenhum documento anexado.</p>
+                        ) : (
+                          patients.find(p => p.id === selectedPatientId)?.documents?.map(doc => (
+                            <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100 group">
+                              <div className="flex items-center space-x-3 overflow-hidden">
+                                <div className="p-0 bg-white rounded-lg text-slate-400 w-9 h-9 flex items-center justify-center overflow-hidden border border-slate-100">
+                                  {doc.type.includes('image') ? (
+                                    <img src={doc.data} alt={doc.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                  ) : doc.type.includes('pdf') ? (
+                                    <FileText size={18} className="text-red-500" />
+                                  ) : doc.type.includes('json') ? (
+                                    <FileText size={18} className="text-blue-500" />
+                                  ) : doc.type.includes('sheet') || doc.type.includes('csv') ? (
+                                    <FileText size={18} className="text-emerald-500" />
+                                  ) : (
+                                    <FileText size={18} />
+                                  )}
+                                </div>
+                                <div className="overflow-hidden">
+                                  <p className="font-bold text-slate-800 text-sm truncate">{doc.name}</p>
+                                  <p className="text-[10px] text-slate-400">{(doc.size / 1024).toFixed(1)} KB • {new Date(doc.createdAt).toLocaleDateString()}</p>
+                                </div>
+                              </div>
+                              <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  type="button"
+                                  onClick={() => setPreviewFile(doc)}
+                                  className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                                  title="Visualizar"
+                                >
+                                  <Eye size={16} />
+                                </button>
+                                <a 
+                                  href={doc.data} 
+                                  download={doc.name}
+                                  className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
+                                  title="Baixar"
+                                >
+                                  <Download size={16} />
+                                </a>
+                                <button 
+                                  type="button"
+                                  onClick={() => deleteDocument(selectedPatientId, doc.id)}
+                                  className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                                  title="Excluir"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      <button type="button" onClick={() => setModal(null)} className="w-full py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-all">FECHAR</button>
+                    </div>
+                  )}
+
+                  {modal === 'relatorio_financeiro' && (
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <div className="flex items-center space-x-2">
+                          <Calendar size={18} className="text-slate-400" />
+                          <span className="text-sm font-bold text-slate-700 uppercase tracking-wider">Período:</span>
+                        </div>
+                        <div className="flex space-x-2">
+                          <select 
+                            value={reportMonth} 
+                            onChange={(e) => setReportMonth(parseInt(e.target.value))}
+                            className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'].map((m, i) => (
+                              <option key={i} value={i + 1}>{m}</option>
+                            ))}
+                          </select>
+                          <select 
+                            value={reportYear} 
+                            onChange={(e) => setReportYear(parseInt(e.target.value))}
+                            className="px-3 py-2 text-xs font-bold bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {[2024, 2025, 2026, 2027].map(y => (
+                              <option key={y} value={y}>{y}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+                          <p className="text-[10px] font-bold text-emerald-600 uppercase mb-1">Receitas</p>
+                          <p className="text-lg font-bold text-emerald-700">R$ {reportData.receitas.toFixed(2)}</p>
+                        </div>
+                        <div className="p-4 bg-red-50 rounded-2xl border border-red-100">
+                          <p className="text-[10px] font-bold text-red-500 uppercase mb-1">Despesas</p>
+                          <p className="text-lg font-bold text-red-600">R$ {reportData.despesas.toFixed(2)}</p>
+                        </div>
+                        <div className={`p-4 rounded-2xl border ${reportData.saldo >= 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                          <p className={`text-[10px] font-bold uppercase mb-1 ${reportData.saldo >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>Saldo</p>
+                          <p className={`text-lg font-bold ${reportData.saldo >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>R$ {reportData.saldo.toFixed(2)}</p>
+                        </div>
+                      </div>
+
+                      <div className="max-h-[200px] overflow-y-auto border border-slate-100 rounded-xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-slate-50 border-b border-slate-100">
+                            <tr>
+                              <th className="px-4 py-2 font-bold text-slate-500">Data</th>
+                              <th className="px-4 py-2 font-bold text-slate-500">Descrição</th>
+                              <th className="px-4 py-2 font-bold text-right text-slate-500">Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {reportData.items.sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).map(f => (
+                              <tr key={f.id}>
+                                <td className="px-4 py-2 text-slate-500">{f.date.split('-').reverse().join('/')}</td>
+                                <td className="px-4 py-2 font-medium text-slate-700">{f.description}</td>
+                                <td className={`px-4 py-2 text-right font-bold ${f.type === 'receita' ? 'text-emerald-600' : 'text-red-600'}`}>
+                                  {f.type === 'receita' ? '+' : '-'} R$ {f.amount.toFixed(2)}
+                                </td>
+                              </tr>
+                            ))}
+                            {reportData.items.length === 0 && (
+                              <tr>
+                                <td colSpan={3} className="px-4 py-8 text-center text-slate-400 italic">Nenhum lançamento neste período.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex space-x-3">
+                        <button type="button" onClick={generateFinancialPDF} className="flex-1 py-4 bg-[#1e293b] text-white font-bold rounded-2xl hover:bg-slate-900 transition-all flex items-center justify-center space-x-2 shadow-lg shadow-slate-200">
+                          <Download size={20} />
+                          <span className="text-sm">Baixar PDF</span>
+                        </button>
+                        <button type="button" onClick={() => setModal(null)} className="flex-1 py-4 bg-[#f1f5f9] text-slate-600 font-bold rounded-2xl hover:bg-slate-200 transition-all text-sm uppercase tracking-wider">FECHAR</button>
+                      </div>
+                    </div>
+                  )}
+
                   {modal === 'aniversariantes' && (
                     <div className="space-y-4">
                       {birthdayPatients.length === 0 ? (
@@ -1490,6 +1904,88 @@ export default function App() {
                       </button>
                     </div>
                   </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modais de Confirmação e Preview */}
+      <AnimatePresence>
+        {confirmDeleteId && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 text-center"
+            >
+              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">Excluir Paciente?</h3>
+              <p className="text-slate-500 text-sm mb-8">Esta ação não pode ser desfeita. Todos os dados e documentos serão perdidos.</p>
+              <div className="flex space-x-3">
+                <button onClick={() => setConfirmDeleteId(null)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-all">CANCELAR</button>
+                <button onClick={confirmDelete} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-100">EXCLUIR</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {confirmDeleteDoc && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-8 text-center"
+            >
+              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">Excluir Documento?</h3>
+              <p className="text-slate-500 text-sm mb-8">Deseja realmente remover este anexo?</p>
+              <div className="flex space-x-3">
+                <button onClick={() => setConfirmDeleteDoc(null)} className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-all">CANCELAR</button>
+                <button onClick={confirmDeleteDocument} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-100">EXCLUIR</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {previewFile && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                <h3 className="font-bold text-slate-800 uppercase tracking-wider text-sm truncate pr-4">
+                  Visualizar: {previewFile.name}
+                </h3>
+                <button onClick={() => setPreviewFile(null)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+              </div>
+              <div className="p-8 overflow-auto flex-1 flex items-center justify-center bg-slate-100/50">
+                {previewFile.type.includes('image') ? (
+                  <img src={previewFile.data} alt={previewFile.name} className="max-w-full h-auto rounded-xl shadow-lg border border-white" referrerPolicy="no-referrer" />
+                ) : previewFile.type.includes('pdf') ? (
+                  <iframe src={previewFile.data} className="w-full h-[600px] rounded-xl border border-slate-200 shadow-sm" title={previewFile.name} />
+                ) : (
+                  <div className="text-center p-12 bg-white rounded-3xl shadow-sm border border-slate-100">
+                    <FileText size={64} className="text-slate-300 mx-auto mb-4" />
+                    <p className="text-slate-500 mb-6">Este tipo de arquivo não pode ser visualizado diretamente.</p>
+                    <a href={previewFile.data} download={previewFile.name} className="inline-flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
+                      <Download size={20} />
+                      <span>Baixar Arquivo</span>
+                    </a>
+                  </div>
+                )}
+              </div>
+              <div className="p-6 border-t border-slate-50 bg-slate-50/50 flex justify-end">
+                <button onClick={() => setPreviewFile(null)} className="px-8 py-3 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 transition-all">FECHAR</button>
               </div>
             </motion.div>
           </div>

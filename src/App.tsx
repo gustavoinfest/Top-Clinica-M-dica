@@ -36,7 +36,7 @@ interface Patient {
 
 interface AutomationRule {
   id: string;
-  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao' | 'aniversario' | 'boas_vindas' | 'avaliacao_google';
+  type: 'pos_consulta' | 'lembrete_consulta' | 'patologia' | 'medicacao' | 'aniversario' | 'boas_vindas';
   conditionValue?: string;
   daysOffset: number;
   messageTemplate: string;
@@ -108,6 +108,7 @@ class ErrorBoundary extends React.Component<any, any> {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingPatient, setEditingPatient] = useState<any>(null);
+  const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -182,14 +183,14 @@ export default function App() {
           id: 'def-1',
           type: 'lembrete_consulta',
           daysOffset: -1,
-          messageTemplate: 'Olá {nome}, confirmamos sua consulta para amanhã. Podemos contar com sua presença? 🏥',
+          messageTemplate: 'Olá {nome}, confirmamos sua consulta para amanhã às {hora}. Podemos contar com sua presença? 🏥',
           createdBy: 'local-user'
         },
         {
           id: 'def-2',
           type: 'pos_consulta',
           daysOffset: 1,
-          messageTemplate: 'Olá {nome}, como você está se sentindo após a consulta de ontem? Qualquer dúvida, estamos à disposição! 😊',
+          messageTemplate: 'Olá {nome}, como você está se sentindo após a consulta de ontem? Sua opinião é muito importante para nós! Avalie nosso atendimento no Google: {link_google} 😊',
           createdBy: 'local-user'
         },
         {
@@ -204,13 +205,6 @@ export default function App() {
           type: 'boas_vindas',
           daysOffset: 0,
           messageTemplate: 'Seja muito bem-vindo(a) à TopClinic, {nome}! 🌟 É um prazer ter você conosco. Estamos aqui para cuidar da sua saúde com excelência.',
-          createdBy: 'local-user'
-        },
-        {
-          id: 'def-5',
-          type: 'avaliacao_google',
-          daysOffset: 1,
-          messageTemplate: 'Olá {nome}, o que achou da sua consulta? Sua opinião é muito importante para nós! Avalie nosso atendimento no Google: {link_google}',
           createdBy: 'local-user'
         }
       ];
@@ -495,9 +489,9 @@ export default function App() {
     const newMessages: Message[] = [];
 
     for (const rule of automationRules) {
-      if (rule.type === 'pos_consulta' || rule.type === 'lembrete_consulta' || rule.type === 'avaliacao_google') {
+      if (rule.type === 'pos_consulta' || rule.type === 'lembrete_consulta') {
         for (const app of appointments) {
-          if ((rule.type === 'pos_consulta' || rule.type === 'avaliacao_google') && app.status !== 'compareceu') continue;
+          if (rule.type === 'pos_consulta' && app.status !== 'compareceu') continue;
           if (rule.type === 'lembrete_consulta' && !['agendado', 'confirmado'].includes(app.status)) continue;
 
           const [year, month, day] = app.date.split('-').map(Number);
@@ -508,10 +502,10 @@ export default function App() {
           targetDate.setDate(targetDate.getDate() + rule.daysOffset);
 
           if (today.getTime() === targetDate.getTime()) {
-            let msgText = rule.messageTemplate.replace('{nome}', getPatientName(app.patientId));
-            if (rule.type === 'avaliacao_google') {
-              msgText = msgText.replace('{link_google}', clinicSettings.googleReviewLink || 'https://g.page/r/exemplo/review');
-            }
+            let msgText = rule.messageTemplate
+              .replace('{nome}', getPatientName(app.patientId))
+              .replace('{hora}', app.time)
+              .replace('{link_google}', clinicSettings.googleReviewLink || 'https://g.page/r/exemplo/review');
             
             const exists = messages.some(m => m.patientId === app.patientId && m.text === msgText) || 
                            newMessages.some(m => m.patientId === app.patientId && m.text === msgText);
@@ -630,14 +624,20 @@ export default function App() {
         showToast('Paciente cadastrado!');
       }
     } else if (type === 'agenda') {
-      const newApp: Appointment = {
-        ...data,
-        id: Date.now().toString(),
-        status: 'agendado',
-        createdBy: user.uid
-      };
-      setAppointments(prev => [...prev, newApp]);
-      showToast('Consulta agendada!');
+      if (editingAppointment) {
+        setAppointments(prev => prev.map(a => a.id === editingAppointment.id ? { ...a, ...data } : a));
+        showToast('Consulta atualizada!');
+        setEditingAppointment(null);
+      } else {
+        const newApp: Appointment = {
+          ...data,
+          id: Date.now().toString(),
+          status: 'agendado',
+          createdBy: user.uid
+        };
+        setAppointments(prev => [...prev, newApp]);
+        showToast('Consulta agendada!');
+      }
     } else if (type === 'financeiro') {
       const newFinance: Finance = {
         ...data,
@@ -1121,10 +1121,17 @@ export default function App() {
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex justify-end space-x-2">
+                              <button 
+                                onClick={() => { setEditingAppointment(app); setModal('agenda'); }} 
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                title="Editar Consulta"
+                              >
+                                <Edit2 size={18} />
+                              </button>
                               {app.status === 'agendado' && (
                                 <>
-                                  <button onClick={() => handleStatusChange(app.id, 'compareceu')} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"><CheckCircle size={18} /></button>
-                                  <button onClick={() => handleStatusChange(app.id, 'faltou')} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><XCircle size={18} /></button>
+                                  <button onClick={() => handleStatusChange(app.id, 'compareceu')} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Compareceu"><CheckCircle size={18} /></button>
+                                  <button onClick={() => handleStatusChange(app.id, 'faltou')} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Faltou"><XCircle size={18} /></button>
                                 </>
                               )}
                             </div>
@@ -1214,6 +1221,7 @@ export default function App() {
                                   lastAppointment.status === 'faltou' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
                                 }`}>{lastAppointment.status}</span>
                                 <div className="flex space-x-1">
+                                  <button onClick={() => { setEditingAppointment(lastAppointment); setModal('agenda'); }} className="p-1 hover:bg-blue-50 text-blue-600 rounded" title="Editar Consulta"><Edit2 size={14} /></button>
                                   <button onClick={() => handleStatusChange(lastAppointment.id, 'compareceu')} className="p-1 hover:bg-emerald-50 text-emerald-600 rounded" title="Compareceu"><Check size={14} /></button>
                                   <button onClick={() => handleStatusChange(lastAppointment.id, 'faltou')} className="p-1 hover:bg-red-50 text-red-600 rounded" title="Faltou"><X size={14} /></button>
                                 </div>
@@ -1517,7 +1525,6 @@ export default function App() {
                               <div className="font-bold text-slate-800 text-sm">
                                 {rule.type === 'pos_consulta' && 'Pós-Consulta'}
                                 {rule.type === 'lembrete_consulta' && 'Lembrete de Consulta'}
-                                {rule.type === 'avaliacao_google' && 'Avaliação no Google'}
                                 {rule.type === 'aniversario' && 'Aniversário'}
                                 {rule.type === 'boas_vindas' && 'Boas-Vindas'}
                                 {rule.type === 'patologia' && `Patologia: ${rule.conditionValue}`}
@@ -1637,7 +1644,7 @@ export default function App() {
               <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
                 <h3 className="font-bold text-slate-800 uppercase tracking-wider text-sm">
                   {modal === 'paciente' && (editingPatient ? 'Editar Paciente' : 'Novo Paciente')}
-                  {modal === 'agenda' && 'Nova Consulta'}
+                  {modal === 'agenda' && (editingAppointment ? 'Editar Consulta' : 'Nova Consulta')}
                   {modal === 'financeiro' && 'Lançamento Financeiro'}
                   {modal === 'mensagem' && 'Nova Mensagem'}
                   {modal === 'automacao' && 'Nova Regra de Automação'}
@@ -1857,16 +1864,16 @@ export default function App() {
                       <>
                         <div>
                           <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Paciente</label>
-                          <select name="patientId" required defaultValue={selectedPatientId} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                          <select name="patientId" required defaultValue={editingAppointment?.patientId || selectedPatientId} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="">Selecione...</option>
                             {patients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                           </select>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                          <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data</label><input name="date" type="date" required defaultValue={todayDate} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
-                          <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Hora</label><input name="time" type="time" required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                          <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Data</label><input name="date" type="date" required defaultValue={editingAppointment?.date || todayDate} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                          <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Hora</label><input name="time" type="time" required defaultValue={editingAppointment?.time || ''} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
                         </div>
-                        <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Tipo</label><input name="type" required defaultValue="Consulta" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
+                        <div><label className="block text-xs font-bold text-slate-400 uppercase mb-1">Tipo</label><input name="type" required defaultValue={editingAppointment?.type || "Consulta"} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" /></div>
                       </>
                     )}
 
@@ -1943,7 +1950,6 @@ export default function App() {
                           <select name="type" required className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="lembrete_consulta">Lembrete Pré-Consulta</option>
                             <option value="pos_consulta">Acompanhamento Pós-Consulta</option>
-                            <option value="avaliacao_google">Avaliação no Google (Pós-Consulta)</option>
                             <option value="aniversario">Aniversário</option>
                             <option value="boas_vindas">Boas-Vindas (Novo Paciente)</option>
                             <option value="patologia">Baseado em Patologia</option>
@@ -1962,15 +1968,15 @@ export default function App() {
                         <div>
                           <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mensagem</label>
                           <textarea name="messageTemplate" required rows="4" className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Olá {nome}, sua consulta é amanhã..."></textarea>
-                          <p className="text-[10px] text-slate-400 mt-1">Você pode usar {'{nome}'} e {'{link_google}'} (para avaliação).</p>
+                          <p className="text-[10px] text-slate-400 mt-1">Você pode usar {'{nome}'}, {'{hora}'} e {'{link_google}'}.</p>
                         </div>
                       </>
                     )}
 
                     <div className="pt-6 flex space-x-3">
-                      <button type="button" onClick={() => { setModal(null); setEditingPatient(null); }} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">CANCELAR</button>
+                      <button type="button" onClick={() => { setModal(null); setEditingPatient(null); setEditingAppointment(null); }} className="flex-1 py-3 text-slate-500 font-bold hover:bg-slate-50 rounded-xl transition-all">CANCELAR</button>
                       <button type="submit" className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
-                        {editingPatient ? 'SALVAR ALTERAÇÕES' : 'SALVAR'}
+                        {(editingPatient || editingAppointment) ? 'SALVAR ALTERAÇÕES' : 'SALVAR'}
                       </button>
                     </div>
                   </form>
